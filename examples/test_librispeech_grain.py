@@ -92,33 +92,58 @@ class JsonlDataSource:
 
 
 # ---------------------------------------------------------------------------
-# Tar random-access data source
+# Tar streaming data source (IterDataset)
 # ---------------------------------------------------------------------------
 
-class TarDataSource:
-    """Random-access data source for tar archives.
+class _TarDatasetIterator(grain.DatasetIterator):
+    """Streams records sequentially from a tar archive."""
 
-    Reads the tar member index on init, then seeks to individual files by
-    index. Each member is expected to contain a single JSON record.
+    def __init__(self, path: str):
+        super().__init__()
+        self._path = path
+        self._tar = tarfile.open(path, "r")
+        self._members = iter(self._tar)
+        self._count = 0
+
+    def __next__(self) -> str:
+        while True:
+            member = next(self._members)  # raises StopIteration at end
+            if member.isfile():
+                f = self._tar.extractfile(member)
+                self._count += 1
+                return f.read().decode("utf-8")
+
+    def get_state(self):
+        return {"count": self._count}
+
+    def set_state(self, state):
+        # Reopen and skip to saved position
+        self._tar.close()
+        self._tar = tarfile.open(self._path, "r")
+        self._members = iter(self._tar)
+        self._count = 0
+        for _ in range(state["count"]):
+            next(self)
+
+    def __del__(self):
+        if hasattr(self, "_tar") and self._tar:
+            self._tar.close()
+
+
+class TarIterDataset(grain.IterDataset):
+    """Streaming IterDataset for tar archives.
+
+    Tar files are sequential by nature — no built-in offset index. Records
+    must be read from start to end, making this a streaming source like
+    Parquet and TFRecord.
     """
 
     def __init__(self, path: str):
+        super().__init__()
         self._path = path
-        self._members: list[tarfile.TarInfo] = []
-        with tarfile.open(path, "r") as tar:
-            for member in tar:
-                if member.isfile():
-                    self._members.append(member)
-        # Sort by name to ensure deterministic order
-        self._members.sort(key=lambda m: m.name)
 
-    def __len__(self) -> int:
-        return len(self._members)
-
-    def __getitem__(self, index: int) -> str:
-        with tarfile.open(self._path, "r") as tar:
-            f = tar.extractfile(self._members[index])
-            return f.read().decode("utf-8")
+    def __iter__(self) -> _TarDatasetIterator:
+        return _TarDatasetIterator(self._path)
 
 
 # ---------------------------------------------------------------------------
@@ -230,29 +255,18 @@ def test_arrayrecord():
 
 
 def test_tar():
-    """Test Tar source with MapDataset."""
+    """Test Tar source with IterDataset (streaming)."""
     path = os.path.join(DATA_DIR, "librispeech_dev_clean.tar")
-    print(f"\n--- Tar Source: {path}")
+    print(f"\n--- Tar Source (streaming): {path}")
 
-    source = TarDataSource(path)
-    print(f"  Total records: {len(source)}")
-
-    # MapDataset pipeline: parse JSON -> add word count -> shuffle -> batch
+    # Tar is sequential — no random access, just like Parquet and TFRecord
     ds = (
-        grain.MapDataset.source(source)
+        TarIterDataset(path)
         .map(ParseJSON())
         .map(AddWordCount())
-        .shuffle(seed=42)
     )
 
-    print_elements(ds, "Tar -> MapDataset (shuffle + word_count)")
-
-    # Test batching
-    ds_batched = ds.batch(batch_size=4)
-    batch = ds_batched[0]
-    print(f"  Batch[0] keys: {list(batch.keys()) if isinstance(batch, dict) else type(batch)}")
-    print(f"  Batch[0] texts: {[t[:40] + '...' for t in batch['text']]}")
-    print(f"  Batch[0] durations: {batch['duration']}")
+    print_elements(ds, "Tar -> IterDataset (word_count)")
 
 
 # ---------------------------------------------------------------------------
@@ -292,8 +306,8 @@ def test_summary():
     print(f"  ArrayRecord: text={rec['text'][:50]}... dur={rec['duration']}")
 
     # Tar
-    source = TarDataSource(os.path.join(DATA_DIR, "librispeech_dev_clean.tar"))
-    rec = json.loads(source[0])
+    ds = TarIterDataset(os.path.join(DATA_DIR, "librispeech_dev_clean.tar"))
+    rec = json.loads(next(iter(ds)))
     print(f"  Tar:         text={rec['text'][:50]}... dur={rec['duration']}")
 
     print(f"\n  All sources produce the same data!")
