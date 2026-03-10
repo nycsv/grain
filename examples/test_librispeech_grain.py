@@ -1,4 +1,4 @@
-"""Test Grain with LibriSpeech dev-clean data in all 4 formats.
+"""Test Grain with LibriSpeech dev-clean data in all 5 formats.
 
 Requires running prepare_librispeech.py first.
 
@@ -8,6 +8,7 @@ Usage:
   python examples/test_librispeech_grain.py --source parquet
   python examples/test_librispeech_grain.py --source tfrecord
   python examples/test_librispeech_grain.py --source arrayrecord
+  python examples/test_librispeech_grain.py --source tar
 """
 
 import argparse
@@ -15,6 +16,7 @@ import json
 import os
 import pickle
 import sys
+import tarfile
 
 import grain
 import numpy as np
@@ -87,6 +89,36 @@ class JsonlDataSource:
         with open(self._path, "r") as f:
             f.seek(self._offsets[index])
             return f.readline().strip()
+
+
+# ---------------------------------------------------------------------------
+# Tar random-access data source
+# ---------------------------------------------------------------------------
+
+class TarDataSource:
+    """Random-access data source for tar archives.
+
+    Reads the tar member index on init, then seeks to individual files by
+    index. Each member is expected to contain a single JSON record.
+    """
+
+    def __init__(self, path: str):
+        self._path = path
+        self._members: list[tarfile.TarInfo] = []
+        with tarfile.open(path, "r") as tar:
+            for member in tar:
+                if member.isfile():
+                    self._members.append(member)
+        # Sort by name to ensure deterministic order
+        self._members.sort(key=lambda m: m.name)
+
+    def __len__(self) -> int:
+        return len(self._members)
+
+    def __getitem__(self, index: int) -> str:
+        with tarfile.open(self._path, "r") as tar:
+            f = tar.extractfile(self._members[index])
+            return f.read().decode("utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +229,32 @@ def test_arrayrecord():
     print(f"  Batch[0] durations: {batch['duration']}")
 
 
+def test_tar():
+    """Test Tar source with MapDataset."""
+    path = os.path.join(DATA_DIR, "librispeech_dev_clean.tar")
+    print(f"\n--- Tar Source: {path}")
+
+    source = TarDataSource(path)
+    print(f"  Total records: {len(source)}")
+
+    # MapDataset pipeline: parse JSON -> add word count -> shuffle -> batch
+    ds = (
+        grain.MapDataset.source(source)
+        .map(ParseJSON())
+        .map(AddWordCount())
+        .shuffle(seed=42)
+    )
+
+    print_elements(ds, "Tar -> MapDataset (shuffle + word_count)")
+
+    # Test batching
+    ds_batched = ds.batch(batch_size=4)
+    batch = ds_batched[0]
+    print(f"  Batch[0] keys: {list(batch.keys()) if isinstance(batch, dict) else type(batch)}")
+    print(f"  Batch[0] texts: {[t[:40] + '...' for t in batch['text']]}")
+    print(f"  Batch[0] durations: {batch['duration']}")
+
+
 # ---------------------------------------------------------------------------
 # Summary: compare all sources
 # ---------------------------------------------------------------------------
@@ -233,6 +291,11 @@ def test_summary():
     rec = pickle.loads(source[0])
     print(f"  ArrayRecord: text={rec['text'][:50]}... dur={rec['duration']}")
 
+    # Tar
+    source = TarDataSource(os.path.join(DATA_DIR, "librispeech_dev_clean.tar"))
+    rec = json.loads(source[0])
+    print(f"  Tar:         text={rec['text'][:50]}... dur={rec['duration']}")
+
     print(f"\n  All sources produce the same data!")
 
 
@@ -245,6 +308,7 @@ RUNNERS = {
     "parquet": test_parquet,
     "tfrecord": test_tfrecord,
     "arrayrecord": test_arrayrecord,
+    "tar": test_tar,
 }
 
 

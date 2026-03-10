@@ -8,7 +8,7 @@ TEST_SCRIPT="$SCRIPT_DIR/test_librispeech_grain.py"
 # Run from /tmp to avoid local source tree shadowing the installed grain package.
 cd /tmp
 
-for source in jsonl parquet tfrecord arrayrecord; do
+for source in jsonl parquet tfrecord arrayrecord tar; do
   echo "=========================================="
   echo "  Testing: $source"
   echo "=========================================="

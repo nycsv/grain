@@ -5,6 +5,7 @@ Steps:
   2. Convert JSONL -> Parquet
   3. Convert JSONL -> TFRecord
   4. Convert JSONL -> ArrayRecord
+  5. Convert JSONL -> Tar (one JSON file per record)
 
 Usage:
   python examples/prepare_librispeech.py \
@@ -18,6 +19,7 @@ import json
 import os
 import pickle
 import struct
+import tarfile
 import wave
 
 from pathlib import Path
@@ -169,6 +171,30 @@ def jsonl_to_arrayrecord(jsonl_path: str, arrayrecord_path: str):
 
 
 # ---------------------------------------------------------------------------
+# Step 5: JSONL -> Tar
+# ---------------------------------------------------------------------------
+
+def jsonl_to_tar(jsonl_path: str, tar_path: str):
+    """Convert NeMo JSONL manifest to a tar archive (one JSON file per record).
+
+    Each record is stored as a file named {index:06d}.json inside the tar.
+    This is similar to WebDataset-style tar archives used in NeMo and other
+    ML pipelines.
+    """
+    import io
+
+    count = 0
+    with tarfile.open(tar_path, "w") as tar, open(jsonl_path, "r") as f:
+        for i, line in enumerate(f):
+            data = line.strip().encode("utf-8")
+            info = tarfile.TarInfo(name=f"{i:06d}.json")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+            count += 1
+    print(f"  Wrote Tar: {tar_path} ({count} records)")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -195,6 +221,7 @@ def main():
     parquet_path = os.path.join(output_dir, "librispeech_dev_clean.parquet")
     tfrecord_path = os.path.join(output_dir, "librispeech_dev_clean.tfrecord")
     arrayrecord_path = os.path.join(output_dir, "librispeech_dev_clean.array_record")
+    tar_path = os.path.join(output_dir, "librispeech_dev_clean.tar")
 
     print("Step 1: Building NeMo JSONL manifest...")
     build_nemo_manifest(args.librispeech_dir, jsonl_path)
@@ -211,8 +238,11 @@ def main():
     except ImportError as e:
         print(f"  Skipped ArrayRecord (missing dependency): {e}")
 
+    print("\nStep 5: Converting JSONL -> Tar...")
+    jsonl_to_tar(jsonl_path, tar_path)
+
     print("\nDone! Output files:")
-    for f in [jsonl_path, parquet_path, tfrecord_path, arrayrecord_path]:
+    for f in [jsonl_path, parquet_path, tfrecord_path, arrayrecord_path, tar_path]:
         if os.path.exists(f):
             size_mb = os.path.getsize(f) / (1024 * 1024)
             print(f"  {f} ({size_mb:.2f} MB)")
