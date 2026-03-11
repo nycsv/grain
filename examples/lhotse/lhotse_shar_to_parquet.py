@@ -50,31 +50,22 @@ def read_cuts_jsonl_gz(path: str) -> list[dict]:
 def flatten_cut(cut: dict) -> dict:
     """Flatten a nested Lhotse cut dict into a flat row for Parquet.
 
-    Lhotse cut structure:
-      {
-        "id": "...",
-        "start": 0.0,
-        "duration": 5.855,
-        "channel": 0,
-        "supervisions": [{"text": "...", "speaker": "...", ...}],
-        "recording": {"sampling_rate": 16000, "num_samples": 93680, ...},
-        "type": "MonoCut"
-      }
+    Stores frequently-queried fields as flat columns for fast SQL filtering,
+    plus the full original cut JSON so no information is lost.
 
-    Flattened to:
-      {
-        "id": "...",
-        "start": 0.0,
-        "duration": 5.855,
-        "channel": 0,
-        "text": "...",
-        "speaker": "...",
-        "sampling_rate": 16000,
-        "num_samples": 93680,
-        "type": "MonoCut",
-        "source_audio_path": "...",
-      }
+    Flat columns (fast SQL queries):
+      id, start, duration, channel, type,
+      text, speaker, language, gender,
+      sampling_rate, num_samples,
+      source_type, source_audio_path
+
+    Full data (for reconstruction):
+      cut_json           — entire original cut as JSON string
+      supervisions_json  — full supervisions array as JSON string
+      recording_json     — full recording dict as JSON string
+      custom_json        — any fields not in the known set
     """
+    # --- Flat columns for common queries ---
     row = {
         "id": cut["id"],
         "start": cut.get("start", 0.0),
@@ -83,7 +74,7 @@ def flatten_cut(cut: dict) -> dict:
         "type": cut.get("type", ""),
     }
 
-    # Flatten first supervision (most common case: one supervision per cut)
+    # Flatten first supervision
     sups = cut.get("supervisions", [])
     if sups:
         sup = sups[0]
@@ -91,33 +82,37 @@ def flatten_cut(cut: dict) -> dict:
         row["speaker"] = sup.get("speaker", "")
         row["language"] = sup.get("language", "")
         row["gender"] = sup.get("gender", "")
-        # Store full supervisions JSON if multiple
-        if len(sups) > 1:
-            row["supervisions_json"] = json.dumps(sups)
-        else:
-            row["supervisions_json"] = ""
     else:
         row["text"] = ""
         row["speaker"] = ""
         row["language"] = ""
         row["gender"] = ""
-        row["supervisions_json"] = ""
 
     # Flatten recording metadata
     rec = cut.get("recording", {})
     row["sampling_rate"] = rec.get("sampling_rate", 0)
     row["num_samples"] = rec.get("num_samples", 0)
 
-    # Extract original audio source path (if available)
     sources = rec.get("sources", [])
     if sources:
-        source_type = sources[0].get("type", "")
-        source_path = sources[0].get("source", "")
-        row["source_type"] = source_type
-        row["source_audio_path"] = source_path
+        row["source_type"] = sources[0].get("type", "")
+        row["source_audio_path"] = sources[0].get("source", "")
     else:
         row["source_type"] = ""
         row["source_audio_path"] = ""
+
+    # --- Full JSON columns (nothing lost) ---
+    row["cut_json"] = json.dumps(cut)
+    row["supervisions_json"] = json.dumps(sups) if sups else ""
+    row["recording_json"] = json.dumps(rec) if rec else ""
+
+    # Capture any extra top-level fields not in the known set
+    known_keys = {
+        "id", "start", "duration", "channel", "type",
+        "supervisions", "recording",
+    }
+    custom = {k: v for k, v in cut.items() if k not in known_keys}
+    row["custom_json"] = json.dumps(custom) if custom else ""
 
     return row
 
