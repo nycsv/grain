@@ -6,14 +6,28 @@ changes. Best viewed [here](https://google-grain.readthedocs.io/en/latest/change
 ## Unreleased
 
 * New features:
+  * `MapDataset.slice` now accepts a `Sequence[int]` (including a
+    `MapDataset[int]`) in addition to a `slice` object, enabling arbitrary index
+    remapping similarly to NumPy's advanced indexing.
 
 * Breaking changes:
 
 * Deprecations:
 
 * Bug fixes:
+  * Fixed bug in DataLoader where sharding remainder was dropped even when ShardOptions.drop_remainder=False.
+
+## Grain 0.2.18 (June 17, 2026)
+
+* New features:
+  * Added Grain telemetry metrics (bytes read, read latency, and prefetch
+    depth) for OSS via Prometheus.
+  * Added support for non-sequence meta-features in Grain packing
+    transformations.
+
+* Bug fixes:
   * `InterleaveDatasetIterator` now overrides `start_prefetch()` such that it
-    indeed starts prefetching (it did not do anything before.)
+    indeed starts prefetching (it did not do anything before).
 
 ## Grain 0.2.17 (June 1, 2026)
 
@@ -57,6 +71,7 @@ changes. Best viewed [here](https://google-grain.readthedocs.io/en/latest/change
   * Exposes `SharedMemoryArrayMetadata` in a public API as a metadata descriptor
     for `SharedMemoryArray`.
   * `ParquetIterDataset` can read from multiple string paths interleaving reads.
+  * Add `ElasticIterDatasetIterator` for scaling up and down the number of shards between checkpoints.
 
 * Breaking changes:
   * Custom implementations of `RandomAccessDataSource` should accept `int`
